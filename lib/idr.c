@@ -3,9 +3,9 @@
 #include <linux/idr.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/xarray.h>
 
 DEFINE_PER_CPU(struct ida_bitmap *, ida_bitmap);
-static DEFINE_SPINLOCK(simple_ida_lock);
 
 /**
  * idr_alloc_u32() - Allocate an ID.
@@ -449,25 +449,30 @@ void ida_remove(struct ida *ida, int id)
 EXPORT_SYMBOL(ida_remove);
 
 /**
- * ida_destroy - Free the contents of an ida
- * @ida: ida handle
+ * ida_destroy() - Free all IDs.
+ * @ida: IDA handle.
  *
- * Calling this function releases all resources associated with an IDA.  When
- * this call returns, the IDA is empty and can be reused or freed.  The caller
- * should not allow ida_remove() or ida_get_new_above() to be called at the
- * same time.
+ * Calling this function frees all IDs and releases all resources used
+ * by an IDA.  When this call returns, the IDA is empty and can be reused
+ * or freed.  If the IDA is already empty, there is no need to call this
+ * function.
+ *
+ * Context: Any context.
  */
 void ida_destroy(struct ida *ida)
 {
+	unsigned long flags;
 	struct radix_tree_iter iter;
 	void __rcu **slot;
 
+	xa_lock_irqsave(&ida->ida_rt, flags);
 	radix_tree_for_each_slot(slot, &ida->ida_rt, &iter, 0) {
 		struct ida_bitmap *bitmap = rcu_dereference_raw(*slot);
 		if (!radix_tree_exception(bitmap))
 			kfree(bitmap);
 		radix_tree_iter_delete(&ida->ida_rt, &iter, slot);
 	}
+	xa_unlock_irqrestore(&ida->ida_rt, flags);
 }
 EXPORT_SYMBOL(ida_destroy);
 
@@ -499,7 +504,7 @@ int ida_alloc_range(struct ida *ida, unsigned int min, unsigned int max,
 
 again:
 
-	spin_lock_irqsave(&simple_ida_lock, flags);
+	xa_lock_irqsave(&ida->ida_rt, flags);
 	ret = ida_get_new_above(ida, min, &id);
 	if (!ret) {
 		if (id > max) {
@@ -509,7 +514,7 @@ again:
 			ret = id;
 		}
 	}
-	spin_unlock_irqrestore(&simple_ida_lock, flags);
+	xa_unlock_irqrestore(&ida->ida_rt, flags);
 
 	if (unlikely(ret == -EAGAIN)) {
 		if (!ida_pre_get(ida, gfp))
@@ -535,8 +540,8 @@ void ida_free(struct ida *ida, unsigned int id)
 	if ((int)id < 0)
 		return;
 
-	spin_lock_irqsave(&simple_ida_lock, flags);
+	xa_lock_irqsave(&ida->ida_rt, flags);
 	ida_remove(ida, id);
-	spin_unlock_irqrestore(&simple_ida_lock, flags);
+	xa_unlock_irqrestore(&ida->ida_rt, flags);
 }
 EXPORT_SYMBOL(ida_free);
