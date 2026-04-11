@@ -1964,10 +1964,12 @@ CONFIG_CNSS_GENL=y
 # CONFIG_VMXNET3 is not set
 # CONFIG_ISDN is not set
 
-#
-# KernelSU
-#
-# CONFIG_KSU is not set
+# kernelsu manual hook
+CONFIG_KSU=y
+CONFIG_KSU_MANUAL_HOOK=y
+# kprobes
+# CONFIG_KPROBES is not set
+# CONFIG_KPROBE_EVENTS is not set
 
 #
 # Input device support
