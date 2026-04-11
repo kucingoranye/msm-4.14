@@ -20,6 +20,7 @@
 #include <linux/uaccess.h>
 #include <linux/mm_inline.h>
 #include <linux/ctype.h>
+#include <linux/pkeys.h>
 
 #include <asm/elf.h>
 #include <asm/tlb.h>
@@ -302,7 +303,6 @@ static int proc_map_release(struct inode *inode, struct file *file)
 	if (priv->mm)
 		mmdrop(priv->mm);
 
-	kfree(priv->rollup);
 	return seq_release_private(inode, file);
 }
 
@@ -661,7 +661,6 @@ const struct file_operations proc_tid_maps_operations = {
 
 #ifdef CONFIG_PROC_PAGE_MONITOR
 struct mem_size_stats {
-	bool first;
 	unsigned long resident;
 	unsigned long shared_clean;
 	unsigned long shared_dirty;
@@ -675,7 +674,6 @@ struct mem_size_stats {
 	unsigned long swap;
 	unsigned long shared_hugetlb;
 	unsigned long private_hugetlb;
-	unsigned long first_vma_start;
 	u64 pss;
 	u64 pss_anon;
 	u64 pss_file;
@@ -990,10 +988,7 @@ void __weak arch_show_smap(struct seq_file *m, struct vm_area_struct *vma)
 
 static int show_smap(struct seq_file *m, void *v, int is_pid)
 {
-	struct proc_maps_private *priv = m->private;
 	struct vm_area_struct *vma = v;
-	struct mem_size_stats mss_stack;
-	struct mem_size_stats *mss;
 	struct mm_walk smaps_walk = {
 		.pmd_entry = smaps_pte_range,
 #ifdef CONFIG_HUGETLB_PAGE
@@ -1001,23 +996,10 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 #endif
 		.mm = vma->vm_mm,
 	};
-	int ret = 0;
-	bool rollup_mode;
-	bool last_vma;
 
-	if (priv->rollup) {
-		rollup_mode = true;
-		mss = priv->rollup;
-		if (mss->first) {
-			mss->first_vma_start = vma->vm_start;
-			mss->first = false;
-		}
-		last_vma = !m_next_vma(priv, vma);
-	} else {
-		rollup_mode = false;
-		memset(&mss_stack, 0, sizeof(mss_stack));
-		mss = &mss_stack;
-	}
+	struct mem_size_stats mss;
+
+	memset(&mss, 0, sizeof(mss));
 
 	smaps_walk.private = mss;
 
@@ -1051,22 +1033,26 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 
 	if (!rollup_mode) {
 		show_map_vma(m, vma, is_pid);
-		if (vma_get_anon_name(vma)) {
-			seq_puts(m, "Name:           ");
-			seq_print_vma_name(m, vma);
-		}
 	} else if (last_vma) {
 		show_vma_header_prefix(
-			m, mss->first_vma_start, vma->vm_end, 0, 0, 0, 0);
+			m, mss.first_vma_start, vma->vm_end, 0, 0, 0, 0);
+		seq_pad(m, ' ');
 		seq_puts(m, "[rollup]\n");
 	} else {
 		ret = SEQ_SKIP;
+		goto out; 
 	}
 
-	if (vma_get_anon_name(vma)) {
-		seq_puts(m, "Name:           ");
-		seq_print_vma_name(m, vma);
+	__show_smap(m, &mss, rollup_mode);
+
+	if (!rollup_mode) {
+		arch_show_smap(m, vma);
+		show_smap_vma_flags(m, vma);
 	}
+
+out:
+	m_cache_vma(m, vma);
+	return ret;
 
 	if (!rollup_mode)
 		seq_printf(m,
@@ -1150,23 +1136,45 @@ static int pid_smaps_open(struct inode *inode, struct file *file)
 	return do_maps_open(inode, file, &proc_pid_smaps_op);
 }
 
-static int pid_smaps_rollup_open(struct inode *inode, struct file *file)
+static int smaps_rollup_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
+	int ret;
 	struct proc_maps_private *priv;
-	int ret = do_maps_open(inode, file, &proc_pid_smaps_op);
 
-	if (ret < 0)
-		return ret;
-	seq = file->private_data;
-	priv = seq->private;
-	priv->rollup = kzalloc(sizeof(*priv->rollup), GFP_KERNEL);
-	if (!priv->rollup) {
-		proc_map_release(inode, file);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL_ACCOUNT);
+	if (!priv)
 		return -ENOMEM;
+
+	ret = single_open(file, show_smaps_rollup, priv);
+	if (ret)
+		goto out_free;
+
+	priv->inode = inode;
+	priv->mm = proc_mem_open(inode, PTRACE_MODE_READ);
+	if (IS_ERR(priv->mm)) {
+		ret = PTR_ERR(priv->mm);
+
+		single_release(inode, file);
+		goto out_free;
 	}
-	priv->rollup->first = true;
+
 	return 0;
+
+out_free:
+	kfree(priv);
+	return ret;
+}
+
+static int smaps_rollup_release(struct inode *inode, struct file *file)
+{
+	struct seq_file *seq = file->private_data;
+	struct proc_maps_private *priv = seq->private;
+
+	if (priv->mm)
+		mmdrop(priv->mm);
+
+	kfree(priv);
+	return single_release(inode, file);
 }
 
 static int tid_smaps_open(struct inode *inode, struct file *file)
@@ -1182,10 +1190,10 @@ const struct file_operations proc_pid_smaps_operations = {
 };
 
 const struct file_operations proc_pid_smaps_rollup_operations = {
-	.open		= pid_smaps_rollup_open,
+	.open		= smaps_rollup_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
-	.release	= proc_map_release,
+	.release	= smaps_rollup_release,
 };
 
 const struct file_operations proc_tid_smaps_operations = {
