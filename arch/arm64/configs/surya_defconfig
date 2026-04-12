@@ -1964,10 +1964,18 @@ CONFIG_CNSS_GENL=y
 # CONFIG_VMXNET3 is not set
 # CONFIG_ISDN is not set
 
-#
-# KernelSU
-#
-# CONFIG_KSU is not set
+# resukisu
+CONFIG_KSU=y
+
+# susfs
+CONFIG_KSU_SUSFS=y
+
+# avc
+CONFIG_AUDIT=y
+
+# kprobes
+# CONFIG_KPROBES is not set
+# CONFIG_KPROBE_EVENTS is not set
 
 #
 # Input device support
