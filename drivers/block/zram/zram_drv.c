@@ -2429,7 +2429,8 @@ static ssize_t disksize_store(struct device *dev,
 	int err;
 	u32 prio;
 
-	disksize = PAGE_ALIGN((u64)SZ_4G);
+	if (kstrtoull(buf, 10, &disksize) || !disksize)
+		disksize = (u64)SZ_1G * 3;
 	pr_info("Setting zRAM size to %llu GB", disksize / 1073741824);
 
 	down_write(&zram->init_lock);
