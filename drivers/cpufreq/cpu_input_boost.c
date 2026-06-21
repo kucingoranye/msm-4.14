@@ -18,6 +18,8 @@
 #include <uapi/linux/sched/types.h>
 #endif
 
+extern int cpufreq_set_governor_by_name(unsigned int cpu, const char *gov_name);
+
 enum {
 	SCREEN_OFF,
 	INPUT_BOOST,
@@ -70,6 +72,18 @@ static void update_online_cpu_policy(void)
 	cpu = cpumask_first_and(cpu_perf_mask, cpu_online_mask);
 	if (cpu < nr_cpu_ids)
 		cpufreq_update_policy(cpu);
+	put_online_cpus();
+}
+
+static void update_lp_cluster_gov(bool screen_off)
+{
+	unsigned int cpu;
+
+	get_online_cpus();
+	cpu = cpumask_first_and(cpu_lp_mask, cpu_online_mask);
+	if (cpu < nr_cpu_ids)
+		cpufreq_set_governor_by_name(cpu,
+					     screen_off ? "schedutil" : "performance");
 	put_online_cpus();
 }
 
@@ -162,6 +176,7 @@ static int cpu_boost_thread(void *data)
 	while (1) {
 		bool should_stop = false;
 		unsigned long curr_state;
+		bool screen_off;
 
 		wait_event(b->boost_waitq,
 			(curr_state = READ_ONCE(b->state)) != old_state ||
@@ -169,6 +184,10 @@ static int cpu_boost_thread(void *data)
 
 		if (should_stop)
 			break;
+
+		screen_off = test_bit(SCREEN_OFF, &curr_state);
+		if (screen_off != test_bit(SCREEN_OFF, &old_state))
+			update_lp_cluster_gov(screen_off);
 
 		old_state = curr_state;
 		update_online_cpu_policy();
