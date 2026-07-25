@@ -61,7 +61,7 @@ jobs:
         run: df -h /
 
       # ------------------------------------------------------------------
-      # 3. SWAP TAMBAHAN (menyesuaikan mode LTO, sama seperti workflow 4.19)
+      # 3. SWAP TAMBAHAN (menyesuaikan mode LTO)
       # ------------------------------------------------------------------
       - name: Setup swap tambahan
         run: |
@@ -115,8 +115,8 @@ jobs:
       # ------------------------------------------------------------------
       # 6. CACHE CCACHE
       #    Catatan: build414-optimasi-v2.sh kamu sengaja "No ccache" untuk
-      #    build lokal, tapi di CI ccache tetap dipakai (sama seperti
-      #    workflow 4.19) karena tiap run mulai dari VM kosong - tanpa
+      #    build lokal, tapi di CI ccache tetap dipakai
+      #    karena tiap run mulai dari VM kosong - tanpa
       #    cache lintas-run, tiap build akan selalu kompilasi dari nol.
       # ------------------------------------------------------------------
       - name: Cache ccache
@@ -157,8 +157,8 @@ jobs:
           echo "artifact_name=kernel-4.14-surya-${BRANCH_SAFE}-${{ github.run_number }}-${TANGGAL}" >> "$GITHUB_OUTPUT"
 
       # ------------------------------------------------------------------
-      # 8. BUILD KERNEL (dengan timer + semua optimasi dari
-      #    build414-optimasi-v2.sh: CFLAGS Kryo 470, LTO via scripts/config,
+      # 8. BUILD KERNEL (dengan timer + optimasi
+      #    : CFLAGS Kryo 470, LTO via scripts/config,
       #    toggle -O3 eksperimental, KBUILD_BUILD_USER/HOST/TIMESTAMP)
       # ------------------------------------------------------------------
       - name: Build kernel
@@ -212,9 +212,8 @@ jobs:
           # --- Generate defconfig awal ---
           make O="$OUT_DIR" "${TOOLCHAIN_ARGS[@]}" "$DEFCONFIG" 2>&1 | tee "$LOG_FILE"
 
-          # --- Manipulasi LTO lewat scripts/config, persis seperti build414-optimasi-v2.sh ---
-          # (Beda dari workflow 4.19 yang pakai LTO="$LTO_MODE" langsung sebagai
-          # argumen make - source 4.14 ini butuh injeksi manual ke .config.)
+          # --- Manipulasi LTO lewat scripts/config ---
+          # (make - source 4.14 ini butuh injeksi manual ke .config.)
           if [ "$LTO_MODE" = "full" ]; then
             echo "--> Menyuntikkan konfigurasi: FULL LTO..." | tee -a "$LOG_FILE"
             ./scripts/config --file "$OUT_DIR/.config" -e LTO_CLANG
@@ -270,8 +269,6 @@ jobs:
 
       # ------------------------------------------------------------------
       # 9. CEK HASIL BUILD
-      #    Surya menghasilkan Image.gz + dtb.img terpisah (bukan Image.gz-dtb
-      #    gabungan seperti whyred) - sesuai verifikasi di build414-optimasi-v2.sh
       # ------------------------------------------------------------------
       - name: Verify build output
         run: |
